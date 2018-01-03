@@ -17,9 +17,9 @@ echo
 echo Installing Binary...
 sudo cp -v ./pigpio-clackws /usr/local/bin
 
-#~ echo
-#~ echo Installing Push Service...
-#~ sudo cp -v ./pigpio-clackws-submitData.sh /usr/local/bin
+echo
+echo Installing Push Service...
+sudo cp -v ./pigpio-clackws-submitData.sh /usr/local/bin
 
 if [ ! -e /etc/systemd/system/pigpio-clackws.service ]; then
  echo Installing systemd service...
@@ -31,8 +31,8 @@ echo Enabling pigpio-clackws systemd Service...
 sudo systemctl enable pigpio-clackws.service
 sudo service pigpio-clackws start
 
-#~ echo Enabling pigpio-clackws Push Service...
-#~ sudo sh -c "echo '* * * * * pi /usr/local/bin/pigpio-clackws-submitData.sh' >/etc/cron.d/pigpio-clackws-submitData"
+echo Enabling pigpio-clackws Push Service...
+sudo sh -c "echo '* * * * * pi /usr/local/bin/pigpio-clackws-submitData.sh' >/etc/cron.d/pigpio-clackws-submitData"
 
 echo
 echo Installation complete!
@@ -41,5 +41,5 @@ echo You may want to modify the GPIO pins that are monitored by editing:
 echo /etc/systemd/system/pigpio-clackws.service
 echo
 echo You can run pigpio-clackws in monitor mode to check if you receive interrupts:
-echo ./pigpio-clackws -m -p 17
+echo ./pigpio-clackws -m
 

@@ -16,13 +16,20 @@
 #include <sys/stat.h>
 #include <pigpio.h>
 
-#define MAX_PINS 54
+#define FLOW_PIN 17
 #define VOLATILE_DIR "/run/pigpio-clackws"
 #define STATIC_DIR "/var/lib/pigpio-clackws"
-#define INT_TIMEOUT_MS 300000
+#define SAMPLE_DELAY 10000000
 
+static volatile uint64_t g_totalCount;
+static volatile uint64_t g_lastInterrupt;
 static unsigned g_monitor, g_debug, g_exit, g_dumpint = 300000000;
 static char *g_arg0;
+
+void myInterrupt(int pin, int level, uint32_t tick) {
+	g_totalCount++;
+	g_lastInterrupt = tick;
+}
 
 void usage(void) {
 	fprintf(stderr, "Usage: %s [-d] [-m] [-t dumpIntSecs]\n", g_arg0);
@@ -44,7 +51,11 @@ int main(int argc, char **argv)
 	extern char *optarg;
 	extern int optind;
 	int c;
+	unsigned lastdump, lastPeriod;
 	g_arg0 = argv[0];
+	char buf[PATH_MAX];
+	FILE *file;
+	uint64_t last;
 
 	while ((c = getopt(argc, argv, "dmw:UDt:p:P:")) != -1) {
 		switch (c) {
@@ -89,9 +100,65 @@ int main(int argc, char **argv)
 	gpioSetSignalFunc(SIGINT, &signal_handler);
 	gpioSetSignalFunc(SIGCONT, &ignore_signal);
 
+	fprintf(stderr, "setting GPIO%d for direction IN -> ", FLOW_PIN);
+	if (gpioSetMode(FLOW_PIN, PI_INPUT)) fprintf(stderr, "FAILED\n"); else fprintf(stderr, "OK\n");
+	fprintf(stderr, "disabling pull-ups for GPIO%d -> ", FLOW_PIN);
+	if (gpioSetPullUpDown(FLOW_PIN, PI_PUD_OFF)) fprintf(stderr, "FAILED\n"); else fprintf(stderr, "OK\n"); 
+	fprintf(stderr, "setting up interrupt handler for GPIO%d -> ", FLOW_PIN);
+	if (gpioSetISRFunc(FLOW_PIN, EITHER_EDGE, 0, &myInterrupt)) fprintf(stderr, "FAILED\n"); else fprintf(stderr, "OK\n");
+
+	if (!g_monitor) {
+		snprintf(buf, PATH_MAX, "%s/totalCount", STATIC_DIR);
+		file = fopen(buf, "r");
+		if (file) {
+			if (fscanf (file, "%"PRIu64, &g_totalCount) == 1) {
+				fprintf(stderr, "initialized totalCount for GPIO%d to %" PRIu64 " from %s\n", FLOW_PIN, g_totalCount, buf);
+			}
+			fclose(file);
+		}
+	}
+
+	lastdump = gpioTick();
+
 	while (1) {
+		unsigned now = gpioTick();
+		unsigned diff = now - lastdump;
+		if (!g_monitor && (g_exit || diff >= g_dumpint)) {
+			snprintf(buf, PATH_MAX, "%s/totalCount", STATIC_DIR);
+			file = fopen(buf, "w");
+			if (file) {
+				fprintf(file, "%" PRIu64 "\n", g_totalCount);
+				fprintf(stderr, "updated %s for GPIO%d to %" PRIu64 "\n", buf, FLOW_PIN, g_totalCount);
+				fclose(file);
+			} else {
+				fprintf(stderr, "cannot open %s for writing: %s", buf, strerror(errno));
+				exit(1);
+			}
+			lastdump = now;
+		}
 		if (g_exit) break;
-		gpioDelay(20000);
+		last = g_totalCount;
+		gpioDelay(SAMPLE_DELAY);
+		last = g_totalCount - last;
+		lastPeriod = last ? (SAMPLE_DELAY / last) : -1;
+		lastPeriod /= 1000;
+		snprintf(buf, PATH_MAX, "%s/totalCount", VOLATILE_DIR);
+		file = fopen(buf, "w");
+		if (file) {
+			fprintf(file, "%" PRIu64 "\n", g_totalCount);
+			if (g_debug) fprintf(stderr, "updated %s for GPIO%d to %" PRIu64 "\n", buf, FLOW_PIN, g_totalCount);
+			fclose(file);
+		}
+		snprintf(buf, PATH_MAX, "%s/lastPeriod", VOLATILE_DIR);
+		file = fopen(buf, "w");
+		if (file) {
+			fprintf(file, "%u\n", lastPeriod);
+			if (g_debug) fprintf(stderr, "updated %s for GPIO%d to %u\n", buf, FLOW_PIN, lastPeriod);
+			fclose(file);
+		}
+		if (g_debug) {
+			fprintf(stderr, "totalCount %" PRIu64 " lastPeriod %u ms\n", g_totalCount, lastPeriod);
+		}
 	}
 
 	gpioTerminate();
